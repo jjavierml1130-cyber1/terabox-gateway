@@ -1,6 +1,8 @@
 """Resolve share metadata directly when the worker cannot extract jsToken."""
 
 import re
+import asyncio
+import json
 import hashlib
 import hmac
 import time
@@ -93,18 +95,21 @@ async def stream_direct(surl: str, cookies: dict, quality: str, gateway_url: str
             params = {**common, "uk": str(data["uk"]), "shareid": str(data["shareid"]),
                       "fid": str(item["fs_id"]), "type": quality, "timestamp": str(timestamp),
                       "sign": stream_signature(browser_id, timestamp), "esl": "1", "isplayer": "1", "ehps": "1"}
-            async with session.get(f"{base}/share/streaming", params=params, headers={"Referer": page_url}) as response:
-                body = await response.text()
-                if response.status == 200 and body.lstrip().startswith("#EXTM3U"):
-                    return {"content": rewrite_playlist(body, str(response.url), gateway_url), "status": 200,
-                            "headers": {"Cache-Control": "no-store"}, "content_type": "application/vnd.apple.mpegurl"}
-                import json
-                try:
-                    errno = json.loads(body).get("errno")
-                except (ValueError, AttributeError):
-                    errno = None
-                return {"error": "TeraBox rejected the streaming request", "errno": errno,
-                        "code": "direct_stream_rejected", "status_code": 502}
+            # Match the web player's bounded retries for its transient 31341 response.
+            for attempt in range(5):
+                async with session.get(f"{base}/share/streaming", params=params, headers={"Referer": page_url}) as response:
+                    body = await response.text()
+                    if response.status == 200 and body.lstrip().startswith("#EXTM3U"):
+                        return {"content": rewrite_playlist(body, str(response.url), gateway_url), "status": 200,
+                                "headers": {"Cache-Control": "no-store"}, "content_type": "application/vnd.apple.mpegurl"}
+                    try:
+                        errno = json.loads(body).get("errno")
+                    except (ValueError, AttributeError):
+                        errno = None
+                if errno != 31341 or attempt == 4:
+                    return {"error": "TeraBox rejected the streaming request", "errno": errno,
+                            "code": "direct_stream_rejected", "status_code": 502}
+                await asyncio.sleep(3 * (attempt + 1))
     except (aiohttp.ClientError, TimeoutError, ValueError, KeyError):
         return {"error": "Direct TeraBox streaming failed", "code": "direct_stream_failed", "status_code": 502}
 

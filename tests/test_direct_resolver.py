@@ -108,3 +108,55 @@ def test_stream_success_returns_hls_not_json(monkeypatch):
     assert response.status_code == 200
     assert response.mimetype == "application/vnd.apple.mpegurl"
     assert response.get_data(as_text=True).startswith("#EXTM3U")
+
+
+@pytest.mark.parametrize("errors,expected_status", [([31341, 31341], 200), ([130], 502), ([31341] * 5, 502)])
+def test_direct_stream_retries_only_transient_errors(monkeypatch, errors, expected_status):
+    from http.cookies import SimpleCookie
+    from terabox_gateway import direct_resolver as module
+
+    class Response:
+        status = 200
+        url = "https://www.terabox.com/share/streaming"
+
+        def __init__(self, text="", data=None):
+            self.body, self.data = text, data
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *args):
+            pass
+
+        async def text(self):
+            return self.body
+
+        async def json(self):
+            return self.data
+
+    responses = [Response('window.jsToken="test-token"'), Response(data={
+        "errno": 0, "uk": "7", "shareid": "8", "list": [{"fs_id": "9", "isdir": 0}],
+    })] + [Response('{"errno":' + str(error) + '}') for error in errors]
+    if expected_status == 200:
+        responses.append(Response('#EXTM3U\n#EXTINF:4,\nhttps://v4.freeterabox.com/video.ts\n'))
+
+    class Session:
+        cookie_jar = type("Jar", (), {"filter_cookies": lambda self, url: SimpleCookie("browserid=test-id")})()
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *args):
+            pass
+
+        def get(self, *args, **kwargs):
+            return responses.pop(0)
+
+    monkeypatch.setattr(module.aiohttp, "ClientSession", lambda **kwargs: Session())
+    monkeypatch.setattr(module.aiohttp, "TCPConnector", lambda **kwargs: None)
+    sleep = AsyncMock()
+    monkeypatch.setattr(module.asyncio, "sleep", sleep)
+    result = asyncio.run(module.stream_direct("abc", {}, "M3U8_AUTO_720", "https://gateway.example/api"))
+    assert result.get("status", result.get("status_code")) == expected_status
+    assert sleep.await_count == (len(errors) if expected_status == 200 else max(0, len(errors) - 1))
+    assert not responses
