@@ -12,6 +12,7 @@ from urllib.parse import parse_qs, urlparse
 import aiohttp
 
 from .config import headers, load_cookies
+from .direct_resolver import resolve_direct, token_extraction_failed
 from .utils import find_between, extract_thumbnail_dimensions, get_formatted_size, request_with_retry
 
 
@@ -22,7 +23,7 @@ class FileList(list):
 
 
 async def fetch_download_link(
-    url: str, password: str = ""
+    url: str, password: str = "", refresh: bool = False
 ) -> Union[List[Dict[str, Any]], Dict[str, Any]]:
     """Fetch file information from TeraBox share link using unified proxy API.
     
@@ -71,6 +72,8 @@ async def fetch_download_link(
                         "surl": surl,
                         "raw": "1",  # Get raw upstream response instead of simplified format
                     }
+                    if refresh:
+                        params["refresh"] = "1"
                     if password:
                         params["pwd"] = password
                     
@@ -83,6 +86,7 @@ async def fetch_download_link(
                             logging.error(f"Proxy returned {response.status}: {error_text}")
                             
                             should_retry = False
+                            err_json = {}
                             try:
                                 import json
                                 err_json = json.loads(error_text)
@@ -108,10 +112,19 @@ async def fetch_download_link(
                             if should_retry:
                                 continue
                             
+                            if token_extraction_failed(err_json):
+                                direct = await resolve_direct(surl, cookies_to_send, password)
+                                if "upstream" in direct:
+                                    result_files = FileList(direct["upstream"]["list"])
+                                    result_files.used_cookies = bool(cookies_to_send)
+                                    result_files.fallback_no_cookie = idx > 0
+                                    return result_files
                             return {
-                                "error": f"Proxy error: {response.status}",
+                                "error": err_json.get("error") or f"Proxy error: {response.status}",
                                 "errno": -1,
-                                "details": error_text[:200]  # Truncate for logging
+                                "message": "The upstream proxy could not resolve this share.",
+                                "code": err_json.get("code"),
+                                "status_code": response.status,
                             }
                         
                         response_data = await response.json()

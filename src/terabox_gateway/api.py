@@ -28,6 +28,7 @@ from .config import (
     PROXY_MODE_HEALTH,
 )
 from .utils import is_valid_share_url, _proxy_request
+from .direct_resolver import resolve_direct, token_extraction_failed
 from .terabox_client import (
     fetch_download_link,
     fetch_direct_links,
@@ -205,6 +206,16 @@ async def api():
             # Make proxy request
             result = await _proxy_request(PROXY_BASE_URL, params, cookies, req_headers=req_headers)
             
+            if mode == PROXY_MODE_RESOLVE and token_extraction_failed(result):
+                surl = params["surl"]
+                # A share-path ID has a prefix that is not part of shorturl.
+                if surl.startswith("1") and len(surl) == 23:
+                    surl = surl[1:]
+                direct = await resolve_direct(surl, cookies, params.get("pwd", ""))
+                if "upstream" in direct:
+                    if params.get("raw") != "1":
+                        direct["data"] = direct.pop("upstream")
+                    return jsonify(direct)
             if "error" in result:
                 return jsonify(result), result.get("status_code", 500)
             
@@ -303,17 +314,18 @@ async def api():
                 resp_dict["warning"] = "Cookies were rate-limited or invalid. Resolved anonymously without cookies. Download links may be missing."
             return jsonify(resp_dict)
 
-        link_data = await fetch_download_link(url, password)
+        link_data = await fetch_download_link(url, password, refresh=refresh)
 
         # Check if error occurred
         if isinstance(link_data, dict) and "error" in link_data:
-            status_code = 400 if link_data.get("requires_password") else 500
+            status_code = link_data.get("status_code", 400 if link_data.get("requires_password") else 500)
             return (
                 jsonify(
                     {
                         "status": "error",
                         "url": url,
                         "error": link_data["error"],
+                        "code": link_data.get("code"),
                         "errno": link_data.get("errno"),
                         "message": link_data.get("message", ""),
                         "requires_password": link_data.get("requires_password", False),
