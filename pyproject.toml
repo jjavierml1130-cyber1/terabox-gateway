@@ -7,7 +7,7 @@ name = "terabox-gateway"
 version = "2.0.2"
 description = "Fast Python gateway for extracting metadata, thumbnails, direct download links, and HLS streaming support from TeraBox share URLs."
 readme = "README.md"
-requires-python = ">=3.8"
+requires-python = ">=3.9"
 keywords = [
     "terabox",
     "gateway",
