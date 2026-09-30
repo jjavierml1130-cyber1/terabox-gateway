@@ -77,7 +77,20 @@ async def stream_direct(surl: str, cookies: dict, quality: str, gateway_url: str
             async with session.get(page_url) as response:
                 if response.status != 200:
                     return {"error": "TeraBox share page unavailable", "status_code": 502}
-                token = extract_js_token(await response.text())
+                page_html = await response.text()
+            try:
+                token = extract_js_token(page_html)
+            except ValueError:
+                # A session challenge can hide the share token. Read the public
+                # share anonymously, while retaining authentication for streaming.
+                async with aiohttp.ClientSession(
+                    cookies={"browserid": session_cookies["browserid"]}, headers=headers,
+                    timeout=aiohttp.ClientTimeout(total=15, connect=5), trust_env=True,
+                ) as public_session:
+                    async with public_session.get(page_url) as public_response:
+                        if public_response.status != 200:
+                            raise ValueError("Public share page unavailable")
+                        token = extract_js_token(await public_response.text())
             common = {"app_id": "250528", "web": "1", "channel": "dubox", "clienttype": "0", "jsToken": token}
             stage = "metadata"
             async with session.get(
