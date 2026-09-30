@@ -204,13 +204,13 @@ async def api():
                     req_headers[k] = v
             
             # Make proxy request
-            if mode == PROXY_MODE_SEGMENT and params.get("direct") == "1":
+            if mode == PROXY_MODE_STREAM:
+                result = await stream_direct(params["surl"], cookies, params.get("type", "M3U8_AUTO_360"),
+                                             request.base_url, params.get("fid", ""))
+            elif mode == PROXY_MODE_SEGMENT and params.get("direct") == "1":
                 result = await media_direct(params["url"], request.base_url, request.headers.get("Range", ""))
             else:
                 result = await _proxy_request(PROXY_BASE_URL, params, cookies, req_headers=req_headers)
-            if mode == PROXY_MODE_STREAM and token_extraction_failed(result):
-                result = await stream_direct(params["surl"], cookies, params.get("type", "M3U8_AUTO_360"),
-                                             request.base_url, params.get("fid", ""))
             
             if mode == PROXY_MODE_RESOLVE and token_extraction_failed(result):
                 surl = params["surl"]
