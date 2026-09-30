@@ -28,7 +28,7 @@ from .config import (
     PROXY_MODE_HEALTH,
 )
 from .utils import is_valid_share_url, _proxy_request
-from .direct_resolver import resolve_direct, token_extraction_failed
+from .direct_resolver import resolve_direct, token_extraction_failed, stream_direct, media_direct
 from .terabox_client import (
     fetch_download_link,
     fetch_direct_links,
@@ -204,7 +204,13 @@ async def api():
                     req_headers[k] = v
             
             # Make proxy request
-            result = await _proxy_request(PROXY_BASE_URL, params, cookies, req_headers=req_headers)
+            if mode == PROXY_MODE_SEGMENT and params.get("direct") == "1":
+                result = await media_direct(params["url"], request.base_url, request.headers.get("Range", ""))
+            else:
+                result = await _proxy_request(PROXY_BASE_URL, params, cookies, req_headers=req_headers)
+            if mode == PROXY_MODE_STREAM and token_extraction_failed(result):
+                result = await stream_direct(params["surl"], cookies, params.get("type", "M3U8_AUTO_360"),
+                                             request.base_url, params.get("fid", ""))
             
             if mode == PROXY_MODE_RESOLVE and token_extraction_failed(result):
                 surl = params["surl"]
