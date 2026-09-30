@@ -68,6 +68,7 @@ async def stream_direct(surl: str, cookies: dict, quality: str, gateway_url: str
     session_cookies = dict(cookies)
     session_cookies.setdefault("browserid", uuid.uuid4().hex)
     connector = aiohttp.TCPConnector(resolver=aiohttp.ThreadedResolver())
+    stage = "share_page"
     try:
         async with aiohttp.ClientSession(
             connector=connector, cookies=session_cookies, headers=headers,
@@ -78,6 +79,7 @@ async def stream_direct(surl: str, cookies: dict, quality: str, gateway_url: str
                     return {"error": "TeraBox share page unavailable", "status_code": 502}
                 token = extract_js_token(await response.text())
             common = {"app_id": "250528", "web": "1", "channel": "dubox", "clienttype": "0", "jsToken": token}
+            stage = "metadata"
             async with session.get(
                 f"{base}/api/shorturlinfo", params={**common, "shorturl": "1" + surl, "root": "1"},
                 headers={"Referer": page_url},
@@ -95,11 +97,13 @@ async def stream_direct(surl: str, cookies: dict, quality: str, gateway_url: str
             params = {**common, "uk": str(data["uk"]), "shareid": str(data["shareid"]),
                       "fid": str(item["fs_id"]), "type": quality, "timestamp": str(timestamp),
                       "sign": stream_signature(browser_id, timestamp), "esl": "1", "isplayer": "1", "ehps": "1"}
+            stage = "hls"
             # Match the web player's bounded retries for its transient 31341 response.
             for attempt in range(5):
                 async with session.get(f"{base}/share/streaming", params=params, headers={"Referer": page_url}) as response:
                     body = await response.text()
                     if response.status == 200 and body.lstrip().startswith("#EXTM3U"):
+                        stage = "rewrite"
                         return {"content": rewrite_playlist(body, str(response.url), gateway_url), "status": 200,
                                 "headers": {"Cache-Control": "no-store"}, "content_type": "application/vnd.apple.mpegurl"}
                     try:
@@ -110,8 +114,9 @@ async def stream_direct(surl: str, cookies: dict, quality: str, gateway_url: str
                     return {"error": "TeraBox rejected the streaming request", "errno": errno,
                             "code": "direct_stream_rejected", "status_code": 502}
                 await asyncio.sleep(3 * (attempt + 1))
-    except (aiohttp.ClientError, TimeoutError, ValueError, KeyError):
-        return {"error": "Direct TeraBox streaming failed", "code": "direct_stream_failed", "status_code": 502}
+    except (aiohttp.ClientError, TimeoutError, ValueError, KeyError) as error:
+        return {"error": "Direct TeraBox streaming failed", "code": "direct_stream_failed",
+                "stage": stage, "failure_type": type(error).__name__, "status_code": 502}
 
 
 async def media_direct(url: str, gateway_url: str, range_header: str = "") -> dict:
